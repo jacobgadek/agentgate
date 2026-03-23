@@ -49,40 +49,45 @@ No API keys, no merchant setup, no config. Sandbox mode uses a built-in mock ada
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Your AI Agent                            │
-│              (LangChain / CrewAI / AutoGen / custom)            │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-                    gate.transact()
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│                      @agentgate/sdk                             │
-│                                                                 │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
-│  │  Identity    │  │   Policy     │  │   Transaction Router   │ │
-│  │  Management  │  │   Engine     │  │   (auto-select best    │ │
-│  │             │  │  (enforce    │  │    protocol by fee)    │ │
-│  │  register() │  │   limits     │  │                        │ │
-│  │  verify()   │  │   before     │  │  ┌──────┐ ┌────────┐  │ │
-│  │  get()      │  │   any $      │  │  │Stripe│ │  x402  │  │ │
-│  └─────────────┘  │   moves)     │  │  │ ACP  │ │        │  │ │
-│                    └──────────────┘  │  └──┬───┘ └───┬────┘  │ │
-│  ┌─────────────┐                     │     │         │       │ │
-│  │   Trust      │  ┌──────────────┐  │  ┌──▼───┐ ┌───▼────┐  │ │
-│  │   Scoring    │  │  Audit Log   │  │  │ MC   │ │  Mock  │  │ │
-│  │             │  │  (SHA-256    │  │  │Agent │ │Adapter │  │ │
-│  │  0-100      │  │   hash       │  │  │ Pay  │ │       │  │ │
-│  │  score      │  │   chain)     │  │  └──────┘ └────────┘  │ │
-│  └─────────────┘  └──────────────┘  └────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │   AgentGate Gateway     │
-              │   (Hono + SQLite)       │
-              │   localhost:3100        │
-              └─────────────────────────┘
+```mermaid
+graph TB
+    Agent["🤖 Your AI Agent<br/>LangChain / CrewAI / AutoGen / custom"]
+
+    Agent -->|"gate.transact()"| SDK
+
+    subgraph SDK["@agentgate/sdk"]
+        Identity["🪪 Identity<br/>register · verify · get"]
+        Policy["🛡️ Policy Engine<br/>enforce limits before<br/>any $ moves"]
+        Router["🔀 Transaction Router<br/>auto-select best<br/>protocol by fee"]
+        Trust["⭐ Trust Scoring<br/>0–100 score"]
+        Audit["📋 Audit Log<br/>SHA-256 hash chain"]
+    end
+
+    subgraph Adapters["Protocol Adapters"]
+        Stripe["💳 Stripe ACP"]
+        X402["🪙 x402"]
+        MC["🔶 MC Agent Pay"]
+        Mock["🧪 Mock"]
+    end
+
+    Router --> Adapters
+    SDK --> Gateway["⚡ AgentGate Gateway<br/>Hono + SQLite · localhost:3100"]
+    Gateway --> Merchants["🏪 Merchants / Services / Other Agents"]
+
+    style Agent fill:#1a1a2e,stroke:#a78bfa,stroke-width:2px,color:#e2e8f0
+    style SDK fill:#16213e,stroke:#a78bfa,stroke-width:1px,color:#e2e8f0
+    style Adapters fill:#1a1a2e,stroke:#635bff,stroke-width:1px,color:#e2e8f0
+    style Gateway fill:#1a1a2e,stroke:#22c55e,stroke-width:2px,color:#e2e8f0
+    style Merchants fill:#1a1a2e,stroke:#64748b,stroke-width:1px,color:#e2e8f0
+    style Stripe fill:#635bff22,stroke:#635bff,color:#e2e8f0
+    style X402 fill:#0052ff22,stroke:#0052ff,color:#e2e8f0
+    style MC fill:#ff5f0022,stroke:#ff5f00,color:#e2e8f0
+    style Mock fill:#64748b22,stroke:#64748b,color:#e2e8f0
+    style Identity fill:#a78bfa15,stroke:#a78bfa,color:#e2e8f0
+    style Policy fill:#a78bfa15,stroke:#a78bfa,color:#e2e8f0
+    style Router fill:#a78bfa15,stroke:#a78bfa,color:#e2e8f0
+    style Trust fill:#a78bfa15,stroke:#a78bfa,color:#e2e8f0
+    style Audit fill:#a78bfa15,stroke:#a78bfa,color:#e2e8f0
 ```
 
 ## Protocols
