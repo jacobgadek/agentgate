@@ -1,0 +1,92 @@
+---
+title: Transaction Routing
+description: How AgentGate selects the best protocol for each transaction.
+---
+
+When a transaction request comes in, the SDK's transaction router selects the best protocol adapter to handle it. This means developers don't need to know which protocol a merchant supports — AgentGate figures it out.
+
+## Routing Logic
+
+The router selects an adapter based on:
+
+1. **Developer preference** — If `preferredProtocol` is set to a specific protocol (e.g., `'stripe-acp'`), that adapter is used directly.
+2. **Intent support** — The adapter must support the transaction intent (`purchase`, `subscribe`, etc.).
+3. **Availability** — The adapter must be operational (e.g., Stripe key configured).
+4. **Lowest fees** — Among available adapters, the one with the lowest estimated fee wins.
+
+```typescript
+// Let the router decide
+const txn = await gate.transact({
+  // ...
+  preferredProtocol: 'auto',     // Router selects the best adapter
+});
+
+// Or specify a protocol
+const txn = await gate.transact({
+  // ...
+  preferredProtocol: 'stripe-acp',  // Force Stripe ACP
+});
+```
+
+## Supported Protocols
+
+| Protocol | Adapter | Status |
+|---|---|---|
+| Mock | `MockAdapter` | Available (sandbox) |
+| Stripe ACP | `StripeACPAdapter` | Available |
+| Coinbase x402 | — | Coming soon |
+| Mastercard Agent Pay | — | Coming soon |
+| Google A2A | — | Coming soon |
+
+## Using Multiple Adapters
+
+You can register multiple adapters. The router will pick the best one for each transaction:
+
+```typescript
+import { AgentGate, StripeACPAdapter, MockAdapter } from '@agentgate/sdk';
+
+const gate = new AgentGate({
+  apiKey: 'ag_dev_xxxx',
+  environment: 'production',
+  adapters: [
+    new StripeACPAdapter({ stripeSecretKey: process.env.STRIPE_KEY! }),
+    // Future: new X402Adapter({ ... }),
+    // Future: new MCAgentPayAdapter({ ... }),
+  ],
+});
+```
+
+When `preferredProtocol: 'auto'`:
+- If Stripe ACP is available and cheapest → routes through Stripe
+- If a future adapter offers lower fees → routes through that instead
+
+## Building Custom Adapters
+
+Every protocol adapter implements the `ProtocolAdapter` interface:
+
+```typescript
+interface ProtocolAdapter {
+  name: string;
+  isAvailable(): Promise<boolean>;
+  supportsIntent(intent: TransactionIntent): boolean;
+  estimateFee(txn: TransactionRequest): Promise<FeeEstimate>;
+  execute(txn: ValidatedTransaction): Promise<TransactionResult>;
+  verify(receipt: TransactionReceipt): Promise<VerificationResult>;
+}
+```
+
+Register your adapter:
+
+```typescript
+gate.registerAdapter(new MyCustomAdapter());
+```
+
+The router will include it in auto-selection. If a developer sets `preferredProtocol` to your adapter's name, it will be used directly.
+
+## Routing in the Gateway
+
+The gateway API uses the same routing logic. When `STRIPE_SECRET_KEY` is set as an environment variable, the Stripe ACP adapter registers automatically:
+
+```bash
+STRIPE_SECRET_KEY=sk_test_xxx pnpm --filter @agentgate/gateway dev
+```

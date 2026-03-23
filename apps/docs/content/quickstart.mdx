@@ -1,0 +1,95 @@
+---
+title: Quickstart
+description: Get from zero to a working agent transaction in under 5 minutes.
+---
+
+## Install
+
+```bash
+npm install @agentgate/sdk
+```
+
+## Initialize
+
+```typescript
+import { AgentGate } from '@agentgate/sdk';
+
+const gate = new AgentGate({
+  apiKey: 'ag_dev_xxxx',       // Get this from your dashboard
+  environment: 'sandbox',      // Use 'production' for real transactions
+});
+```
+
+## Register an Agent
+
+Every agent needs an identity with policies that define what it's allowed to do:
+
+```typescript
+const agent = await gate.identity.register({
+  name: 'shopping-assistant',
+  owner: 'user_12345',                // The human this agent acts for
+  capabilities: ['purchase', 'compare'],
+  policies: {
+    maxTransactionAmount: 500,         // Max $500 per transaction
+    allowedCategories: ['electronics', 'books'],
+    requireHumanApproval: { above: 100 }, // Human must approve above $100
+    allowedMerchants: ['*'],           // Any merchant
+    dailySpendLimit: 1000,
+    blockedMerchants: [],
+  },
+});
+
+console.log(agent.id);          // agent_abc123...
+console.log(agent.trustScore);  // 50 (starting score)
+```
+
+## Execute a Transaction
+
+```typescript
+const txn = await gate.transact({
+  agentId: agent.id,
+  intent: 'purchase',
+  item: {
+    description: 'The Pragmatic Programmer',
+    amount: 42.99,
+    currency: 'USD',
+    merchantUrl: 'https://bookstore.example.com/pragprog',
+    category: 'books',
+  },
+  preferredProtocol: 'auto',     // Let AgentGate pick the best protocol
+});
+
+console.log(txn.status);     // 'completed'
+console.log(txn.protocol);   // 'mock' (sandbox) or 'stripe-acp' (production)
+console.log(txn.receipt);    // Protocol-specific receipt
+```
+
+## Check Trust Score
+
+```typescript
+const trust = await gate.trust.score(agent.id);
+
+console.log(trust.score);              // 52 (increased after successful txn)
+console.log(trust.level);              // 'established'
+console.log(trust.totalTransactions);  // 1
+console.log(trust.successRate);        // 1.0
+```
+
+## What Happens Under the Hood
+
+1. **Policy check** — The SDK verifies the transaction against the agent's policies. If it violates any rule (e.g., exceeds `maxTransactionAmount`), the transaction is rejected before it reaches a protocol.
+
+2. **Human approval gate** — If the amount exceeds `requireHumanApproval.above`, the transaction returns with `status: 'pending_approval'` and waits for a human to approve or deny it.
+
+3. **Protocol routing** — The router selects the best available protocol adapter. In sandbox mode, this is the mock adapter. In production, it selects based on merchant support, fees, and reliability.
+
+4. **Execution** — The selected adapter runs the full protocol handshake (e.g., for Stripe ACP: create checkout session → provision SharedPaymentToken → complete checkout).
+
+5. **Trust update** — Successful transactions increase the agent's trust score. Failed transactions decrease it.
+
+## Next Steps
+
+- Read about [Identity](/docs/concepts/identity) to understand agent registration
+- Learn how [Policies](/docs/concepts/policies) protect against overspending
+- Understand [Trust Scoring](/docs/concepts/trust) and why merchants care
+- See the [API Reference](/docs/api-reference/transact) for all transaction options

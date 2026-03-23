@@ -1,0 +1,17 @@
+{
+  "name": "@agentgate/example-langchain-shopping-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@agentgate/sdk": "workspace:*",
+    "@langchain/core": "^0.3.0",
+    "langchain": "^0.3.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

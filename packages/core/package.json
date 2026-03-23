@@ -1,0 +1,44 @@
+{
+  "name": "@agentgate/core",
+  "version": "0.1.0",
+  "description": "Core types, protocols, and constants for the AgentGate ecosystem.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "ai-agents",
+    "agentic-commerce",
+    "agent-payments",
+    "interoperability",
+    "types"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacobgadek/agentgate",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/jacobgadek/agentgate#readme",
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

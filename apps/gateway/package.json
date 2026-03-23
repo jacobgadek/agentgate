@@ -1,0 +1,31 @@
+{
+  "name": "@agentgate/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --import tsx src/index.ts",
+    "clean": "rm -rf dist",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:seed": "node --import tsx src/db/seed.ts"
+  },
+  "dependencies": {
+    "@agentgate/core": "workspace:*",
+    "@agentgate/sdk": "workspace:*",
+    "@hono/node-server": "^1.14.0",
+    "hono": "^4.7.0",
+    "drizzle-orm": "^0.44.0",
+    "postgres": "^3.4.0",
+    "better-sqlite3": "^11.9.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^25.5.0",
+    "drizzle-kit": "^0.31.0",
+    "typescript": "^5.8.0",
+    "tsx": "^4.19.0"
+  }
+}

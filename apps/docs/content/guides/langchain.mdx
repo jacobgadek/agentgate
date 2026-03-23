@@ -1,0 +1,116 @@
+---
+title: LangChain Integration
+description: Use AgentGate as a tool in a LangChain agent.
+---
+
+AgentGate integrates with LangChain as a custom tool. Your LangChain agent can register identities, execute transactions, and check trust scores through the AgentGate SDK.
+
+## Setup
+
+```bash
+npm install @agentgate/sdk langchain @langchain/openai
+```
+
+## Create AgentGate Tools
+
+Wrap AgentGate's SDK methods as LangChain tools:
+
+```typescript
+import { AgentGate } from '@agentgate/sdk';
+import { DynamicTool } from 'langchain/tools';
+
+const gate = new AgentGate({
+  apiKey: process.env.AGENTGATE_API_KEY!,
+  environment: 'sandbox',
+});
+
+// Register an agent upfront
+const agent = await gate.identity.register({
+  name: 'langchain-shopper',
+  owner: 'user_123',
+  capabilities: ['purchase', 'compare'],
+  policies: {
+    maxTransactionAmount: 200,
+    allowedCategories: ['electronics', 'books'],
+    requireHumanApproval: { above: 100 },
+    allowedMerchants: ['*'],
+    dailySpendLimit: 500,
+    blockedMerchants: [],
+  },
+});
+
+const purchaseTool = new DynamicTool({
+  name: 'purchase',
+  description: 'Purchase an item. Input: JSON with description, amount, currency, merchantUrl.',
+  func: async (input: string) => {
+    const { description, amount, currency, merchantUrl } = JSON.parse(input);
+    const txn = await gate.transact({
+      agentId: agent.id,
+      intent: 'purchase',
+      item: { description, amount, currency, merchantUrl },
+      preferredProtocol: 'auto',
+    });
+    return JSON.stringify({
+      status: txn.status,
+      protocol: txn.protocol,
+      transactionId: txn.id,
+    });
+  },
+});
+
+const trustTool = new DynamicTool({
+  name: 'check_trust',
+  description: 'Check the current trust score of this agent.',
+  func: async () => {
+    const trust = await gate.trust.score(agent.id);
+    return JSON.stringify(trust);
+  },
+});
+```
+
+## Use with a LangChain Agent
+
+```typescript
+import { ChatOpenAI } from '@langchain/openai';
+import { AgentExecutor, createOpenAIFunctionsAgent } from 'langchain/agents';
+import { ChatPromptTemplate } from '@langchain/core/prompts';
+
+const llm = new ChatOpenAI({ model: 'gpt-4o', temperature: 0 });
+
+const prompt = ChatPromptTemplate.fromMessages([
+  ['system', `You are a shopping assistant. You can purchase items for the user
+using the purchase tool. Always check prices are reasonable before buying.
+After purchasing, check the trust score to confirm the transaction was recorded.`],
+  ['human', '{input}'],
+  ['placeholder', '{agent_scratchpad}'],
+]);
+
+const langchainAgent = await createOpenAIFunctionsAgent({
+  llm,
+  tools: [purchaseTool, trustTool],
+  prompt,
+});
+
+const executor = new AgentExecutor({
+  agent: langchainAgent,
+  tools: [purchaseTool, trustTool],
+});
+
+const result = await executor.invoke({
+  input: 'Buy me "The Pragmatic Programmer" for $42.99 from https://bookstore.example.com/pragprog',
+});
+
+console.log(result.output);
+```
+
+## What Happens
+
+1. The LangChain agent receives the user's request
+2. It calls the `purchase` tool with the item details
+3. AgentGate checks policies, routes the transaction, and returns the result
+4. The agent reports back to the user with the transaction status
+5. If the amount exceeds the approval threshold, the agent tells the user it's pending approval
+
+## Full Example
+
+See the [langchain-shopping-agent example](https://github.com/agentgate/agentgate/tree/main/examples/langchain-shopping-agent) for a complete working implementation.

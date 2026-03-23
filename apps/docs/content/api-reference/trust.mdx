@@ -1,0 +1,108 @@
+---
+title: Trust API
+description: Endpoints for querying agent trust scores and reports.
+---
+
+## Get Trust Score
+
+Query an agent's current trust score.
+
+### SDK
+
+```typescript
+const trust = await gate.trust.score(agent.id);
+```
+
+### Gateway API
+
+```
+GET /v1/trust/:agentId
+Authorization: Bearer ag_dev_xxxx
+```
+
+**Response (200):**
+
+```json
+{
+  "agentId": "agent_abc123...",
+  "score": 87,
+  "totalTransactions": 142,
+  "successRate": 0.98,
+  "level": "verified"
+}
+```
+
+### Trust Levels
+
+| Level | Score Range | Description |
+|---|---|---|
+| `new` | 0 – 29 | Newly registered, no track record |
+| `established` | 30 – 59 | Some successful transactions |
+| `trusted` | 60 – 84 | Consistent reliability |
+| `verified` | 85 – 100 | Highly reliable with extensive history |
+
+---
+
+## Get Trust Report
+
+Full trust report intended for merchants. Includes trust events and audit trail entries.
+
+### Gateway API
+
+```
+GET /v1/trust/:agentId/report
+Authorization: Bearer ag_dev_xxxx
+```
+
+**Response (200):**
+
+```json
+{
+  "agentId": "agent_abc123...",
+  "name": "shopping-assistant",
+  "score": 87,
+  "level": "verified",
+  "totalTransactions": 142,
+  "successRate": 0.98,
+  "status": "active",
+  "registeredAt": "2026-01-15T...",
+  "recentTrustEvents": [
+    {
+      "id": "te_...",
+      "agentId": "agent_abc123...",
+      "eventType": "txn_success",
+      "scoreChange": 2,
+      "newScore": 87,
+      "metadata": { "transactionId": "txn_..." },
+      "createdAt": "2026-03-22T..."
+    }
+  ],
+  "recentAuditEntries": [
+    {
+      "id": "audit_...",
+      "agentId": "agent_abc123...",
+      "transactionId": "txn_...",
+      "eventType": "transaction_completed",
+      "eventData": { "protocol": "stripe-acp", "amount": 42.99 },
+      "signature": "a3f2c1...",
+      "previousHash": "b4e5d6...",
+      "createdAt": "2026-03-22T..."
+    }
+  ]
+}
+```
+
+### Trust Event Types
+
+| Event Type | Score Impact | Description |
+|---|---|---|
+| `txn_success` | +2 | Transaction completed successfully |
+| `txn_fail` | -2 | Transaction failed during execution |
+| `dispute` | -5 | A merchant disputed a transaction |
+| `verification` | +1 | Agent identity was verified |
+
+### Audit Log Hash Chain
+
+Each audit entry contains a `signature` and `previousHash` field. The signature is a SHA-256 hash of the entry's data concatenated with the previous entry's hash. This forms a tamper-evident chain — if any entry is modified, all subsequent signatures become invalid.
+
+The genesis entry (first in the chain) has a `previousHash` of `0000...0000` (64 zeros).

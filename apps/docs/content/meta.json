@@ -1,0 +1,10 @@
+{
+  "title": "AgentGate",
+  "pages": [
+    "index",
+    "quickstart",
+    "concepts",
+    "api-reference",
+    "guides"
+  ]
+}

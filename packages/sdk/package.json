@@ -1,0 +1,57 @@
+{
+  "name": "@agentgate/sdk",
+  "version": "0.1.0",
+  "description": "The interoperability SDK for AI agent transactions. One integration, every agentic payment rail.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "test": "node --test test/**/*.test.ts"
+  },
+  "keywords": [
+    "ai-agents",
+    "agentic-commerce",
+    "stripe-acp",
+    "agent-payments",
+    "interoperability",
+    "trust",
+    "sdk",
+    "langchain",
+    "crewai",
+    "autogen"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacobgadek/agentgate",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/jacobgadek/agentgate#readme",
+  "peerDependencies": {
+    "@agentgate/core": ">=0.1.0"
+  },
+  "dependencies": {
+    "@agentgate/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

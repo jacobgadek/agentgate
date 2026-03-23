@@ -1,0 +1,115 @@
+---
+title: CrewAI Integration
+description: Use AgentGate with CrewAI for multi-agent commerce workflows.
+---
+
+AgentGate works with CrewAI to add commerce capabilities to multi-agent workflows. Your CrewAI agents can make purchases, compare prices, and manage subscriptions through AgentGate's unified API.
+
+## Setup
+
+```bash
+pip install crewai
+npm install @agentgate/sdk
+```
+
+Since CrewAI is Python-based and AgentGate's SDK is TypeScript, the recommended integration pattern is to run the AgentGate gateway API and have your CrewAI agents call it via HTTP.
+
+## Architecture
+
+```
+CrewAI Agent (Python)
+       │
+       │  HTTP requests
+       ▼
+AgentGate Gateway API (Node.js)
+       │
+       ▼
+Protocol Adapters → Merchants
+```
+
+## Start the Gateway
+
+```bash
+cd agentgate
+pnpm --filter @agentgate/gateway dev
+# Gateway running on http://localhost:3100
+```
+
+## CrewAI Agent with AgentGate
+
+```python
+import requests
+from crewai import Agent, Task, Crew
+
+GATEWAY_URL = "http://localhost:3100"
+API_KEY = "ag_dev_sandbox_key"
+HEADERS = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# Register an agent identity
+def register_agent():
+    resp = requests.post(f"{GATEWAY_URL}/v1/identity/register", headers=HEADERS, json={
+        "name": "crewai-shopper",
+        "owner": "user_crewai",
+        "capabilities": ["purchase", "compare"],
+        "policies": {
+            "maxTransactionAmount": 300,
+            "allowedCategories": ["electronics", "books"],
+            "requireHumanApproval": {"above": 150},
+            "allowedMerchants": ["*"],
+            "dailySpendLimit": 1000,
+            "blockedMerchants": []
+        }
+    })
+    return resp.json()
+
+# Purchase tool
+def purchase_item(agent_id: str, description: str, amount: float, merchant_url: str):
+    resp = requests.post(f"{GATEWAY_URL}/v1/transact", headers=HEADERS, json={
+        "agentId": agent_id,
+        "intent": "purchase",
+        "item": {
+            "description": description,
+            "amount": amount,
+            "currency": "USD",
+            "merchantUrl": merchant_url
+        },
+        "preferredProtocol": "auto"
+    })
+    return resp.json()
+
+# Check trust
+def check_trust(agent_id: str):
+    resp = requests.get(f"{GATEWAY_URL}/v1/trust/{agent_id}", headers=HEADERS)
+    return resp.json()
+
+# Set up CrewAI
+agent_identity = register_agent()
+
+shopper = Agent(
+    role="Shopping Assistant",
+    goal="Find and purchase the best products for the user within budget",
+    backstory="You are a careful shopping agent that always checks prices and policies.",
+)
+
+task = Task(
+    description=f"Purchase 'The Pragmatic Programmer' for $42.99 from https://bookstore.example.com. Agent ID: {agent_identity['id']}",
+    agent=shopper,
+)
+
+crew = Crew(agents=[shopper], tasks=[task])
+result = crew.kickoff()
+```
+
+## Multi-Agent Workflow
+
+CrewAI excels at multi-agent coordination. A common pattern:
+
+1. **Research Agent** — Compares prices across merchants
+2. **Compliance Agent** — Verifies the purchase meets policies
+3. **Purchasing Agent** — Executes the transaction via AgentGate
+4. **Reporting Agent** — Checks trust score and logs the outcome
+
+Each agent can call AgentGate's API independently, and they all share the same agent identity and trust score.

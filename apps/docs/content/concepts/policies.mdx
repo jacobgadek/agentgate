@@ -1,0 +1,96 @@
+---
+title: Policies
+description: Spending limits, merchant restrictions, and human approval gates.
+---
+
+Policies define what an agent is allowed to do. They're set at registration time and enforced on every transaction before it reaches a protocol adapter.
+
+If a transaction violates any policy, it's **rejected immediately** — the protocol adapter never sees it.
+
+## Available Policies
+
+| Policy | Type | Description |
+|---|---|---|
+| `maxTransactionAmount` | `number` | Maximum amount per single transaction (USD) |
+| `dailySpendLimit` | `number` | Maximum total spend per day |
+| `allowedCategories` | `string[]` | Restrict transactions to specific product categories |
+| `allowedMerchants` | `string[]` | `['*']` for any merchant, or specific merchant IDs/URLs |
+| `blockedMerchants` | `string[]` | Block specific merchants (overrides allowedMerchants) |
+| `requireHumanApproval` | `{ above: number }` | Transactions above this USD amount return `pending_approval` |
+
+## Example
+
+```typescript
+const agent = await gate.identity.register({
+  name: 'budget-shopper',
+  owner: 'user_12345',
+  capabilities: ['purchase'],
+  policies: {
+    maxTransactionAmount: 200,         // Never spend more than $200 at once
+    dailySpendLimit: 500,              // Max $500/day across all transactions
+    allowedCategories: ['books', 'groceries'],  // Only these categories
+    requireHumanApproval: { above: 50 },        // Ask the human above $50
+    allowedMerchants: ['*'],
+    blockedMerchants: ['shady-store.com'],
+  },
+});
+```
+
+## Policy Evaluation Order
+
+When `gate.transact()` is called:
+
+1. **Max transaction amount** — Is the amount within the per-transaction limit?
+2. **Daily spend limit** — Would this transaction push the day's total over the limit?
+3. **Category check** — Is the item's category in the allowed list? (If no category is provided or the allowed list is empty, this check is skipped.)
+4. **Blocked merchants** — Is the merchant on the block list?
+5. **Allowed merchants** — Is the merchant on the allow list? (Skipped if `['*']`.)
+
+If any check fails, the transaction returns with `status: 'rejected'` and the violation details in `policyCheck.violations`.
+
+## Human Approval Flow
+
+If all policy checks pass but the amount exceeds `requireHumanApproval.above`, the transaction returns with `status: 'pending_approval'`. No money moves until a human approves.
+
+```typescript
+const txn = await gate.transact({
+  agentId: agent.id,
+  intent: 'purchase',
+  item: { description: 'Expensive item', amount: 150, currency: 'USD', merchantUrl: '...' },
+  preferredProtocol: 'auto',
+});
+
+console.log(txn.status);  // 'pending_approval'
+
+// Later, the human approves via the gateway API:
+// POST /v1/transact/:txnId/approve
+// { "approved": true }
+```
+
+## Policy Violations
+
+When a transaction is rejected, the response includes specific violation details:
+
+```json
+{
+  "status": "rejected",
+  "policyCheck": {
+    "allowed": false,
+    "violations": [
+      {
+        "rule": "maxTransactionAmount",
+        "message": "Transaction amount $600 exceeds limit of $500"
+      }
+    ]
+  }
+}
+```
+
+## Why Policies Matter
+
+Without policies, an AI agent with access to a payment method could theoretically spend unlimited money. AgentGate's policy system ensures:
+
+- **No surprise spending** — Hard limits that can't be overridden by the agent
+- **Category containment** — An agent meant to buy groceries can't buy stocks
+- **Human oversight** — High-value transactions pause for human review
+- **Merchant control** — Only transact with approved merchants

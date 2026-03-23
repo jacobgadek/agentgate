@@ -1,0 +1,69 @@
+---
+title: Trust Scoring
+description: How agents build verifiable reputation through AgentGate.
+---
+
+Trust scoring is the core of what makes AgentGate infrastructure, not just a convenience library. Every agent builds a reputation score that merchants can query before accepting a transaction.
+
+## Trust Levels
+
+| Level | Score Range | Description |
+|---|---|---|
+| `new` | 0 – 29 | Newly registered agent, no transaction history |
+| `established` | 30 – 59 | Has some successful transactions |
+| `trusted` | 60 – 84 | Consistent track record |
+| `verified` | 85 – 100 | Highly reliable agent with extensive history |
+
+## How Scores Change
+
+| Event | Impact |
+|---|---|
+| Successful transaction | +2 |
+| Failed transaction | -2 |
+| Policy violation (rejected) | -1 |
+| Dispute | -5 |
+| Verification passed | +1 |
+
+New agents start with a score of **50** (established level).
+
+## Querying Trust
+
+```typescript
+const trust = await gate.trust.score(agent.id);
+
+console.log(trust.score);              // 87
+console.log(trust.level);              // 'verified'
+console.log(trust.totalTransactions);  // 142
+console.log(trust.successRate);        // 0.98
+```
+
+### Full Trust Report
+
+The gateway API provides a detailed trust report that merchants can use:
+
+```bash
+curl http://localhost:3100/v1/trust/agent_xxx/report \
+  -H "Authorization: Bearer ag_dev_xxx"
+```
+
+The report includes:
+- Current score and level
+- Total transactions and success rate
+- Recent trust events (score changes with reasons)
+- Recent audit log entries (cryptographically verified)
+
+## Why Trust Matters
+
+In agentic commerce, a merchant is accepting a transaction from an AI agent, not a human. The merchant needs to answer:
+
+1. **Is this agent legitimate?** — Identity verification handles this.
+2. **Will this transaction succeed?** — Trust score answers this.
+3. **Has this agent behaved well historically?** — The audit trail proves this.
+
+Without trust scores, every agent looks the same. With them, merchants can offer better terms to trusted agents (lower fees, higher limits, faster processing) while being more cautious with new ones.
+
+## Audit Trail
+
+Every trust-relevant event is written to an append-only audit log with a cryptographic hash chain. Each entry's signature is computed from its content plus the previous entry's hash, forming a tamper-evident chain.
+
+If any entry in the chain is modified after the fact, the hash chain breaks — making tampering detectable. This is what makes AgentGate's trust data enterprise-grade and NIST-compatible.

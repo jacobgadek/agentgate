@@ -1,0 +1,75 @@
+---
+title: Sandbox Guide
+description: How to use the sandbox environment for development and testing.
+---
+
+The sandbox environment lets you develop and test AgentGate integrations without real payment rails. All transactions route through the mock adapter, which simulates successful transactions instantly.
+
+## Running the Sandbox Demo
+
+```bash
+cd agentgate
+pnpm install
+pnpm build
+pnpm --filter @agentgate/sandbox dev
+```
+
+This runs the built-in demo that walks through the full flow:
+
+1. Initialize the SDK in sandbox mode
+2. Register an agent with policies
+3. Browse a mock merchant catalog
+4. Execute a transaction under the approval threshold (completes immediately)
+5. Execute a transaction over the approval threshold (returns `pending_approval`)
+6. Check the agent's trust score
+
+## Sandbox vs Production
+
+| Feature | Sandbox | Production |
+|---|---|---|
+| Default adapter | Mock (simulated) | Stripe ACP, x402, etc. |
+| Transactions | Always succeed (mock) | Real payment processing |
+| Trust scores | Updated locally | Persisted in database |
+| API key prefix | `ag_dev_sandbox_*` | `ag_dev_*` |
+| Gateway URL | `http://localhost:3100` | `https://api.agentgate.dev` |
+
+## Using the SDK in Sandbox Mode
+
+```typescript
+import { AgentGate } from '@agentgate/sdk';
+
+const gate = new AgentGate({
+  apiKey: 'ag_dev_sandbox_demo',
+  environment: 'sandbox',  // This is the default
+});
+```
+
+In sandbox mode:
+- The mock adapter is registered automatically
+- No external API calls are made
+- Transactions complete in ~100ms
+- Trust scores update in memory
+
+## Using the Gateway in Sandbox Mode
+
+Start the gateway:
+
+```bash
+pnpm --filter @agentgate/gateway dev
+```
+
+The gateway:
+- Creates a local SQLite database (`agentgate.db`)
+- Seeds a sandbox developer with API key `ag_dev_sandbox_key`
+- Registers the mock adapter
+- Runs on port 3100
+
+All endpoints work the same as production — you can develop your full integration against the sandbox gateway and switch to production by changing the API key and gateway URL.
+
+## Pre-built Scenarios
+
+The sandbox includes pre-built scenarios in `apps/sandbox/src/scenarios/`:
+
+- **`shopping.ts`** — Agent compares products and buys the cheapest
+- **`booking.ts`** — Agent subscribes to a service
+- **`subscription.ts`** — Agent manages subscriptions with strict policies and approval gates

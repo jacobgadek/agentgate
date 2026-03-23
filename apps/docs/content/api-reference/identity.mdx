@@ -1,0 +1,125 @@
+---
+title: Identity API
+description: Endpoints for agent identity registration and verification.
+---
+
+## Register Agent
+
+Register a new agent identity with policies.
+
+### SDK
+
+```typescript
+const agent = await gate.identity.register({
+  name: 'shopping-assistant',
+  owner: 'user_12345',
+  capabilities: ['purchase', 'compare', 'subscribe'],
+  policies: {
+    maxTransactionAmount: 500,
+    allowedCategories: ['electronics', 'books', 'groceries'],
+    requireHumanApproval: { above: 100 },
+    allowedMerchants: ['*'],
+    dailySpendLimit: 1000,
+    blockedMerchants: [],
+  },
+});
+```
+
+### Gateway API
+
+```
+POST /v1/identity/register
+Authorization: Bearer ag_dev_xxxx
+Content-Type: application/json
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | Yes | Human-readable agent name |
+| `owner` | `string` | Yes | User ID of the human owner |
+| `capabilities` | `string[]` | Yes | Array of capabilities |
+| `policies` | `object` | Yes | Policy configuration |
+
+**Response (201):**
+
+```json
+{
+  "id": "agent_abc123...",
+  "developerId": "dev_xyz...",
+  "name": "shopping-assistant",
+  "ownerUserId": "user_12345",
+  "capabilities": ["purchase", "compare", "subscribe"],
+  "policies": { ... },
+  "trustScore": 50,
+  "totalTransactions": 0,
+  "successRate": 1.0,
+  "status": "active",
+  "createdAt": "2026-03-22T..."
+}
+```
+
+---
+
+## Get Agent
+
+Retrieve an agent's identity by ID.
+
+### SDK
+
+```typescript
+const agent = gate.identity.get(agentId);
+```
+
+### Gateway API
+
+```
+GET /v1/identity/:agentId
+Authorization: Bearer ag_dev_xxxx
+```
+
+**Response (200):** Same shape as the registration response.
+
+**Response (404):**
+```json
+{ "error": "Agent not found" }
+```
+
+---
+
+## Verify Agent
+
+Verify an agent's identity and status. Used by merchants to confirm an agent is legitimate before accepting a transaction.
+
+### SDK
+
+```typescript
+const result = gate.identity.verify(agentId);
+// { valid: true, agent: {...}, reason: undefined }
+// { valid: false, agent: {...}, reason: 'Agent is suspended' }
+```
+
+### Gateway API
+
+```
+POST /v1/identity/verify
+Authorization: Bearer ag_dev_xxxx
+Content-Type: application/json
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agentId` | `string` | Yes | Agent ID to verify |
+
+**Response (200):**
+
+```json
+{
+  "valid": true,
+  "reason": null,
+  "agent": { ... }
+}
+```

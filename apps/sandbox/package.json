@@ -1,0 +1,20 @@
+{
+  "name": "@agentgate/sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/mock-agent.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --import tsx src/mock-agent.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@agentgate/sdk": "workspace:*",
+    "@agentgate/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "tsx": "^4.19.0"
+  }
+}

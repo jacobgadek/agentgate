@@ -1,0 +1,46 @@
+---
+title: Introduction
+description: AgentGate is the interoperability SDK for AI agent transactions.
+---
+
+AgentGate is a developer infrastructure SDK and hosted gateway that sits between AI agents and the fragmented world of agentic commerce protocols.
+
+**One integration. Every agentic payment rail.**
+
+An agent developer integrates the SDK once and gets access to every agentic payment rail — Stripe ACP, Coinbase x402, Mastercard Agent Pay, Google A2A, and more — through a single unified API.
+
+## What AgentGate Handles
+
+- **Identity Management** — Register agents with verifiable identities that merchants can trust
+- **Policy Enforcement** — Spending limits, merchant allowlists, category restrictions, and human approval thresholds
+- **Transaction Routing** — Automatically selects the best protocol based on availability, fees, and merchant support
+- **Trust Scoring** — Agents build a reputation score over time that merchants can query
+- **Audit Trail** — Append-only, cryptographically hash-chained log of every action
+
+## Architecture
+
+```
+Your Agent (LangChain, CrewAI, custom)
+         │
+         ▼
+   ┌─────────────┐
+   │  AgentGate   │  ← You integrate here. Once.
+   │     SDK      │
+   └──────┬──────┘
+          │
+          ▼
+   ┌─────────────────────────────────────┐
+   │         Protocol Adapters           │
+   │  Stripe ACP │ x402 │ MC Agent Pay  │
+   └──────┬──────────────────────────────┘
+          │
+          ▼
+     Merchants / Services
+```
+
+## Quick Links
+
+- [Quickstart](/docs/quickstart) — Get a working transaction in 5 minutes
+- [Concepts](/docs/concepts/identity) — Understand identity, policies, trust, and routing
+- [API Reference](/docs/api-reference/identity) — Full endpoint documentation
+- [Guides](/docs/guides/langchain) — Framework integration guides

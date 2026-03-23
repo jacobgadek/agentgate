@@ -1,0 +1,81 @@
+---
+title: Identity
+description: How agent identity works in AgentGate.
+---
+
+Every AI agent that transacts through AgentGate needs a registered identity. This identity is how merchants verify who they're transacting with and how the trust system tracks reputation.
+
+## What an Agent Identity Contains
+
+When you register an agent, the identity includes:
+
+| Field | Description |
+|---|---|
+| `id` | Unique identifier (e.g., `agent_abc123`) |
+| `developerId` | The developer account that owns this agent |
+| `name` | Human-readable name |
+| `owner` | The human user this agent acts on behalf of |
+| `capabilities` | What this agent can do: `purchase`, `compare`, `subscribe`, `refund` |
+| `policies` | Spending and authorization rules (see [Policies](/docs/concepts/policies)) |
+| `trustScore` | Current trust score (0-100) |
+| `status` | `active`, `suspended`, or `revoked` |
+
+## Registration
+
+```typescript
+const agent = await gate.identity.register({
+  name: 'shopping-assistant',
+  owner: 'user_12345',
+  capabilities: ['purchase', 'compare'],
+  policies: {
+    maxTransactionAmount: 500,
+    allowedCategories: ['electronics', 'books'],
+    requireHumanApproval: { above: 100 },
+    allowedMerchants: ['*'],
+    dailySpendLimit: 1000,
+    blockedMerchants: [],
+  },
+});
+```
+
+## Verification
+
+Merchants can verify an agent's identity before accepting a transaction:
+
+```typescript
+// SDK
+const result = gate.identity.verify(agentId);
+// { valid: true, agent: {...}, reason: undefined }
+
+// Gateway API
+// POST /v1/identity/verify
+// { "agentId": "agent_abc123" }
+```
+
+Verification checks:
+1. Does the agent exist?
+2. Is the agent's status `active` (not `suspended` or `revoked`)?
+3. Is the developer account in good standing?
+
+## Identity and Trust
+
+An agent's identity is tied to its trust score. When an agent completes a successful transaction, its trust score increases. When transactions fail, the score decreases.
+
+Merchants can query an agent's trust score to decide whether to accept a transaction:
+
+```typescript
+const trust = await gate.trust.score(agent.id);
+// { score: 87, level: 'verified', totalTransactions: 142, successRate: 0.98 }
+```
+
+This creates a virtuous cycle: agents that transact reliably earn higher trust scores, which makes merchants more likely to accept their transactions.
+
+## Identity Across Protocols
+
+When a transaction routes through a specific protocol, AgentGate translates the agent's identity into the format that protocol expects:
+
+- **Stripe ACP**: Identity is presented via the `User-Agent` header and `Authorization` bearer token
+- **x402**: Identity maps to the payment sender's wallet address
+- **Google A2A**: Identity maps to an Agent Card
+
+The developer doesn't need to handle these translations — the protocol adapter handles it automatically.

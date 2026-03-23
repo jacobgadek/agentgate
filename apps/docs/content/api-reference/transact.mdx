@@ -1,0 +1,146 @@
+---
+title: Transaction API
+description: Endpoints for executing transactions and managing approvals.
+---
+
+## Execute Transaction
+
+Execute a transaction through the best available protocol adapter.
+
+### SDK
+
+```typescript
+const txn = await gate.transact({
+  agentId: agent.id,
+  intent: 'purchase',
+  item: {
+    description: 'Sony WH-1000XM5 Headphones',
+    amount: 278.00,
+    currency: 'USD',
+    merchantUrl: 'https://merchant.com/product/123',
+    category: 'electronics',
+  },
+  preferredProtocol: 'auto',
+  metadata: { reason: 'User requested headphones under $300' },
+});
+```
+
+### Gateway API
+
+```
+POST /v1/transact
+Authorization: Bearer ag_dev_xxxx
+Content-Type: application/json
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agentId` | `string` | Yes | Agent executing the transaction |
+| `intent` | `string` | Yes | `purchase`, `subscribe`, `compare`, or `refund` |
+| `item.description` | `string` | Yes | Item description |
+| `item.amount` | `number` | Yes | Amount in dollars (not cents) |
+| `item.currency` | `string` | Yes | `USD`, `EUR`, or `GBP` |
+| `item.merchantUrl` | `string` | Yes | Merchant product URL |
+| `item.category` | `string` | No | Category for policy checks |
+| `preferredProtocol` | `string` | No | `auto` (default), `stripe-acp`, `x402`, `mc-agent-pay` |
+| `metadata` | `object` | No | Arbitrary metadata stored with the transaction |
+
+**Response (200):**
+
+```json
+{
+  "id": "txn_abc123...",
+  "agentId": "agent_xyz...",
+  "status": "completed",
+  "protocol": "stripe-acp",
+  "receipt": {
+    "transactionId": "txn_abc123...",
+    "protocol": "stripe-acp",
+    "amount": 278.00,
+    "currency": "USD",
+    "merchantUrl": "https://merchant.com/product/123",
+    "timestamp": "2026-03-22T...",
+    "protocolData": {
+      "checkoutSessionId": "cs_test_...",
+      "orderId": "order_...",
+      "paymentTokenId": "spt_..."
+    }
+  },
+  "trustImpact": 2,
+  "policyCheck": {
+    "allowed": true,
+    "violations": []
+  },
+  "createdAt": "2026-03-22T...",
+  "completedAt": "2026-03-22T..."
+}
+```
+
+### Transaction Statuses
+
+| Status | Description |
+|---|---|
+| `completed` | Transaction executed successfully |
+| `pending_approval` | Awaiting human approval (amount exceeds threshold) |
+| `rejected` | Blocked by policy violation |
+| `failed` | Protocol execution failed |
+| `processing` | Transaction is being processed |
+
+---
+
+## Get Transaction Status
+
+Retrieve a transaction by ID.
+
+### Gateway API
+
+```
+GET /v1/transact/:txnId
+Authorization: Bearer ag_dev_xxxx
+```
+
+**Response (200):** Full transaction record including receipt data, policy check result, and approval status.
+
+---
+
+## Approve Transaction
+
+Approve or deny a transaction that is pending human approval.
+
+### Gateway API
+
+```
+POST /v1/transact/:txnId/approve
+Authorization: Bearer ag_dev_xxxx
+Content-Type: application/json
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `approved` | `boolean` | No | `true` to approve (default), `false` to deny |
+
+**Response (200):**
+
+When approved, the transaction is executed through the selected protocol and returns with `status: 'completed'`. When denied, the transaction returns with `status: 'rejected'`.
+
+### Approval Flow Example
+
+```typescript
+// 1. Agent requests a $250 purchase (above $100 approval threshold)
+const txn = await gate.transact({
+  agentId: agent.id,
+  intent: 'purchase',
+  item: { description: 'Expensive item', amount: 250, currency: 'USD', merchantUrl: '...' },
+  preferredProtocol: 'auto',
+});
+// txn.status === 'pending_approval'
+
+// 2. Show the pending transaction to the human user
+// 3. Human approves via the gateway API:
+// POST /v1/transact/txn_xxx/approve { "approved": true }
+// 4. Transaction executes and returns 'completed'
+```
