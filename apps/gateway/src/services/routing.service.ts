@@ -12,7 +12,7 @@ const stripeKey = process.env.STRIPE_SECRET_KEY;
 if (stripeKey) {
   const stripeAcp = new StripeACPAdapter({
     stripeSecretKey: stripeKey,
-    signingSecret: process.env.STRIPE_SIGNING_SECRET,
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
   });
   adapters.set(stripeAcp.name, stripeAcp);
   console.log('[gateway] Stripe ACP adapter registered');

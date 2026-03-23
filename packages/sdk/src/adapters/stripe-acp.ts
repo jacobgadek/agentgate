@@ -10,35 +10,41 @@ import type {
   ProtocolName,
   Currency,
 } from '@agentgate/core';
-import { createHash, randomUUID } from 'node:crypto';
+import Stripe from 'stripe';
+import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { generateId } from '../utils/crypto.js';
 
-// ── ACP Types ───────────────────────────────────────────────
+// ── Config ──────────────────────────────────────────────────
 
 export interface StripeACPConfig {
   /** Stripe secret key (sk_test_... or sk_live_...) */
   stripeSecretKey: string;
-  /** API version for ACP protocol */
-  acpApiVersion?: string;
-  /** Base URL for Stripe API */
+  /** Default currency for transactions (defaults to 'usd') */
+  defaultCurrency?: string;
+  /** Webhook signing secret for verifying seller events */
+  webhookSecret?: string;
+  /** Request timeout in milliseconds (defaults to 30000) */
+  timeout?: number;
+  /** Override Stripe API base URL (for testing) */
   stripeBaseUrl?: string;
-  /** HMAC signing secret for request signatures */
-  signingSecret?: string;
 }
 
-interface ACPCheckoutSession {
+// ── ACP Protocol Types (per spec 2026-01-30) ────────────────
+
+interface ACPBuyer {
+  name: string;
+  email?: string;
+  phone?: string;
+}
+
+interface ACPItem {
   id: string;
-  status: 'not_ready_for_payment' | 'ready_for_payment' | 'completed' | 'canceled' | 'in_progress';
-  line_items: ACPLineItem[];
-  totals: ACPTotal[];
-  payment_provider: { provider: string; supported_payment_methods: string[] };
-  order?: { id: string; checkout_session_id: string; permalink_url: string };
-  messages?: ACPMessage[];
+  quantity: number;
 }
 
 interface ACPLineItem {
   id: string;
-  item: { id: string; quantity: number };
+  item: ACPItem;
   base_amount: number;
   discount: number;
   subtotal: number;
@@ -46,10 +52,31 @@ interface ACPLineItem {
   total: number;
 }
 
+interface ACPAddress {
+  line1?: string;
+  line2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+}
+
+interface ACPFulfillmentOption {
+  id: string;
+  label: string;
+  amount: number;
+  estimated_delivery?: string;
+}
+
 interface ACPTotal {
-  type: string;
+  type: 'subtotal' | 'shipping' | 'tax' | 'discount' | 'total';
   display_text: string;
   amount: number;
+}
+
+interface ACPPaymentProvider {
+  provider: string;
+  supported_payment_methods: string[];
 }
 
 interface ACPMessage {
@@ -58,47 +85,101 @@ interface ACPMessage {
   code?: string;
 }
 
-interface SharedPaymentToken {
+interface ACPOrder {
   id: string;
-  created: number;
-  usage_limits: {
-    currency: string;
-    max_amount: number;
-    expires_at: number;
-  };
+  checkout_session_id: string;
+  status?: string;
+  permalink_url: string;
 }
 
-// ── Stripe ACP Adapter ─────────────────────────────────────
+interface ACPLink {
+  url: string;
+  rel: string;
+  type?: string;
+}
+
+export type ACPCheckoutStatus =
+  | 'not_ready_for_payment'
+  | 'ready_for_payment'
+  | 'in_progress'
+  | 'completed'
+  | 'canceled';
+
+export interface ACPCheckoutSession {
+  id: string;
+  status: ACPCheckoutStatus;
+  buyer?: ACPBuyer;
+  line_items: ACPLineItem[];
+  totals: ACPTotal[];
+  fulfillment_options?: ACPFulfillmentOption[];
+  selected_fulfillment_option?: string;
+  shipping_address?: ACPAddress;
+  payment_provider: ACPPaymentProvider;
+  order?: ACPOrder;
+  messages?: ACPMessage[];
+  links?: ACPLink[];
+}
+
+interface ACPPaymentData {
+  token: string;
+  provider: string;
+}
+
+// ── Error Types ─────────────────────────────────────────────
+
+export class StripeACPError extends Error {
+  constructor(
+    message: string,
+    public readonly step: 'create' | 'update' | 'spt' | 'complete' | 'retrieve' | 'cancel' | 'webhook',
+    public readonly statusCode?: number,
+    public readonly sellerMessage?: string,
+  ) {
+    super(message);
+    this.name = 'StripeACPError';
+  }
+}
+
+// ── Stripe ACP Adapter ──────────────────────────────────────
 
 export class StripeACPAdapter implements ProtocolAdapter {
   name: ProtocolName = 'stripe-acp';
-  private config: Required<StripeACPConfig>;
+  private stripe: Stripe;
+  private defaultCurrency: string;
+  private webhookSecret: string;
+  private timeout: number;
+  private stripeBaseUrl: string;
+  private stripeSecretKey: string;
 
   constructor(config: StripeACPConfig) {
-    this.config = {
-      stripeSecretKey: config.stripeSecretKey,
-      acpApiVersion: config.acpApiVersion ?? '2025-09-12',
-      stripeBaseUrl: config.stripeBaseUrl ?? 'https://api.stripe.com',
-      signingSecret: config.signingSecret ?? '',
-    };
+    this.stripeSecretKey = config.stripeSecretKey;
+    this.defaultCurrency = config.defaultCurrency ?? 'usd';
+    this.webhookSecret = config.webhookSecret ?? '';
+    this.timeout = config.timeout ?? 30_000;
+    this.stripeBaseUrl = config.stripeBaseUrl ?? 'https://api.stripe.com';
+
+    // Use a placeholder key if none provided — isAvailable() will return false
+    const effectiveKey = config.stripeSecretKey || 'sk_none_placeholder';
+    this.stripe = new Stripe(effectiveKey, {
+      apiVersion: '2025-12-18.acacia' as Stripe.LatestApiVersion,
+      ...(config.stripeBaseUrl ? { host: new URL(config.stripeBaseUrl).hostname, port: Number(new URL(config.stripeBaseUrl).port) || undefined, protocol: new URL(config.stripeBaseUrl).protocol.replace(':', '') as 'http' | 'https' } : {}),
+    });
   }
 
+  // ── ProtocolAdapter Interface ─────────────────────────────
+
   async isAvailable(): Promise<boolean> {
-    // Verify the Stripe key is present and looks valid
     return (
-      !!this.config.stripeSecretKey &&
-      (this.config.stripeSecretKey.startsWith('sk_test_') ||
-        this.config.stripeSecretKey.startsWith('sk_live_'))
+      !!this.stripeSecretKey &&
+      (this.stripeSecretKey.startsWith('sk_test_') ||
+        this.stripeSecretKey.startsWith('sk_live_'))
     );
   }
 
   supportsIntent(intent: TransactionIntent): boolean {
-    // ACP supports purchase and subscribe intents
     return intent === 'purchase' || intent === 'subscribe';
   }
 
   async estimateFee(txn: TransactionRequest): Promise<FeeEstimate> {
-    // Stripe's standard fee: 2.9% + $0.30
     const percentageFee = 0.029;
     const fixedFee = 0.30;
     const feeAmount = txn.item.amount * percentageFee + fixedFee;
@@ -118,78 +199,89 @@ export class StripeACPAdapter implements ProtocolAdapter {
     const txnId = generateId('txn');
 
     try {
-      const merchantBase = this.resolveMerchantUrl(request.item.merchantUrl);
+      const sellerBase = this.resolveSellerUrl(request.item.merchantUrl);
 
-      // Step 1: Create ACP Checkout Session with the merchant
-      const checkoutSession = await this.createCheckoutSession(merchantBase, request);
+      // Step 1: Create checkout session with the seller
+      const session = await this.createCheckout(sellerBase, request);
 
-      // Step 2: If session requires payment, provision a SharedPaymentToken
-      if (
-        checkoutSession.status === 'ready_for_payment' ||
-        checkoutSession.status === 'not_ready_for_payment'
-      ) {
-        // Update session with buyer details
-        await this.updateCheckoutSession(merchantBase, checkoutSession.id, {
-          buyer: {
-            name: agent.owner,
-            email: `${agent.owner}@agentgate.dev`,
-          },
-        });
+      // Step 2: Update with buyer details and shipping if needed
+      const updated = await this.updateCheckout(sellerBase, session.id, {
+        buyer: {
+          name: agent.owner ?? agent.name,
+          email: `${agent.name}@agentgate.dev`,
+        },
+        ...(session.fulfillment_options?.length
+          ? { selected_fulfillment_option: session.fulfillment_options[0].id }
+          : {}),
+      });
 
-        // Create a scoped SharedPaymentToken (this calls Stripe, not the merchant)
-        const spt = await this.createSharedPaymentToken({
-          amount: Math.round(request.item.amount * 100), // Convert to cents
-          currency: request.item.currency.toLowerCase(),
-          merchantUrl: request.item.merchantUrl,
-        });
-
-        // Step 3: Complete the checkout with the payment token
-        const completed = await this.completeCheckout(merchantBase, checkoutSession.id, {
-          token: spt.id,
-          provider: 'stripe',
-        });
-
-        // Step 4: Build receipt from the completed session
-        return {
-          id: txnId,
-          agentId: request.agentId,
-          status: 'completed',
-          protocol: 'stripe-acp',
-          receipt: {
-            transactionId: txnId,
-            protocol: 'stripe-acp',
-            amount: request.item.amount,
-            currency: request.item.currency,
-            merchantUrl: request.item.merchantUrl,
-            timestamp: now,
-            protocolData: {
-              checkoutSessionId: completed.id,
-              orderId: completed.order?.id,
-              orderUrl: completed.order?.permalink_url,
-              paymentTokenId: spt.id,
-              provider: 'stripe',
-            },
-          },
-          trustImpact: 2,
-          policyCheck,
-          createdAt: now,
-          completedAt: now,
-        };
+      // Check if seller is ready for payment
+      if (updated.status !== 'ready_for_payment' && updated.status !== 'not_ready_for_payment') {
+        // Seller rejected or session is in unexpected state
+        const errorMsg = updated.messages?.find(m => m.type === 'error')?.content;
+        throw new StripeACPError(
+          `Seller not ready for payment: status=${updated.status}${errorMsg ? ` (${errorMsg})` : ''}`,
+          'update',
+        );
       }
 
-      // Session created but in unexpected state
+      // Step 3: Provision a SharedPaymentToken via Stripe API
+      const totalAmount = this.extractTotal(updated);
+      const sptAmount = totalAmount > 0 ? totalAmount : Math.round(request.item.amount * 100);
+      const currency = request.item.currency.toLowerCase() || this.defaultCurrency;
+
+      const spt = await this.createSharedPaymentToken({
+        amount: sptAmount,
+        currency,
+        merchantUrl: request.item.merchantUrl,
+      });
+
+      // Step 4: Complete the checkout with the payment token
+      const completed = await this.completeCheckout(sellerBase, updated.id, {
+        token: spt.id,
+        provider: 'stripe',
+      });
+
+      if (completed.status !== 'completed') {
+        const errorMsg = completed.messages?.find(m => m.type === 'error')?.content;
+        throw new StripeACPError(
+          `Checkout completion failed: status=${completed.status}${errorMsg ? ` (${errorMsg})` : ''}`,
+          'complete',
+        );
+      }
+
       return {
         id: txnId,
         agentId: request.agentId,
-        status: 'processing',
+        status: 'completed',
         protocol: 'stripe-acp',
-        receipt: null,
-        trustImpact: 0,
+        receipt: {
+          transactionId: txnId,
+          protocol: 'stripe-acp',
+          amount: request.item.amount,
+          currency: request.item.currency,
+          merchantUrl: request.item.merchantUrl,
+          timestamp: now,
+          protocolData: {
+            checkoutSessionId: completed.id,
+            orderId: completed.order?.id,
+            orderUrl: completed.order?.permalink_url,
+            orderStatus: completed.order?.status,
+            paymentTokenId: spt.id,
+            provider: 'stripe',
+            totals: completed.totals,
+            lineItems: completed.line_items.length,
+          },
+        },
+        trustImpact: 2,
         policyCheck,
         createdAt: now,
-        completedAt: null,
+        completedAt: now,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      const step = error instanceof StripeACPError ? error.step : 'unknown';
+
       return {
         id: txnId,
         agentId: request.agentId,
@@ -219,12 +311,12 @@ export class StripeACPAdapter implements ProtocolAdapter {
       };
     }
 
-    const merchantBase = receipt.merchantUrl
-      ? this.resolveMerchantUrl(receipt.merchantUrl)
-      : this.config.stripeBaseUrl;
+    const sellerBase = receipt.merchantUrl
+      ? this.resolveSellerUrl(receipt.merchantUrl)
+      : this.stripeBaseUrl;
 
     try {
-      const session = await this.retrieveCheckoutSession(merchantBase, sessionId);
+      const session = await this.getCheckout(sellerBase, sessionId);
       return {
         valid: session.status === 'completed',
         protocol: 'stripe-acp',
@@ -233,6 +325,7 @@ export class StripeACPAdapter implements ProtocolAdapter {
           sessionId: session.id,
           status: session.status,
           orderId: session.order?.id,
+          orderStatus: session.order?.status,
         },
       };
     } catch {
@@ -245,191 +338,289 @@ export class StripeACPAdapter implements ProtocolAdapter {
     }
   }
 
-  // ── ACP Protocol Methods ────────────────────────────────
-
-  private buildHeaders(body?: unknown): Record<string, string> {
-    const timestamp = new Date().toISOString();
-    const idempotencyKey = randomUUID();
-    const requestId = randomUUID();
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.config.stripeSecretKey}`,
-      'Content-Type': 'application/json',
-      'API-Version': this.config.acpApiVersion,
-      'Idempotency-Key': idempotencyKey,
-      'Request-Id': requestId,
-      Timestamp: timestamp,
-      'User-Agent': `AgentGate/0.1.0 (agentic-commerce-protocol)`,
-    };
-
-    // Add HMAC signature if signing secret is configured
-    if (this.config.signingSecret && body) {
-      const payload = JSON.stringify(body);
-      const signature = createHash('sha256')
-        .update(payload + timestamp + this.config.signingSecret)
-        .digest('base64');
-      headers['Signature'] = signature;
-    }
-
-    return headers;
-  }
+  // ── ACP Endpoints (per spec) ──────────────────────────────
 
   /**
-   * Step 1: Create a checkout session with the merchant.
-   * POST /checkout_sessions
+   * POST /checkouts — Create a new checkout session with the seller.
    */
-  private async createCheckoutSession(
-    merchantBase: string,
+  async createCheckout(
+    sellerBase: string,
     request: TransactionRequest,
   ): Promise<ACPCheckoutSession> {
     const body = {
       items: [
         {
-          id: request.item.merchantUrl, // merchant product identifier
+          id: request.item.description || request.item.merchantUrl,
           quantity: 1,
         },
       ],
-      metadata: request.metadata,
+      ...(request.metadata ? { metadata: request.metadata } : {}),
     };
 
-    const response = await fetch(
-      `${merchantBase}/checkout_sessions`,
-      {
-        method: 'POST',
-        headers: this.buildHeaders(body),
-        body: JSON.stringify(body),
-      },
+    const res = await this.sellerRequest<ACPCheckoutSession>(
+      'POST',
+      `${sellerBase}/checkouts`,
+      body,
+      'create',
     );
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`ACP CreateCheckout failed (${response.status}): ${error}`);
-    }
-
-    return response.json() as Promise<ACPCheckoutSession>;
+    return res;
   }
 
   /**
-   * Step 2: Update checkout session with buyer details.
-   * POST /checkout_sessions/{id}
+   * PUT /checkouts/:id — Update an existing checkout session.
    */
-  private async updateCheckoutSession(
-    merchantBase: string,
+  async updateCheckout(
+    sellerBase: string,
     sessionId: string,
-    data: { buyer: { name: string; email: string } },
+    data: {
+      buyer?: ACPBuyer;
+      shipping_address?: ACPAddress;
+      selected_fulfillment_option?: string;
+    },
   ): Promise<ACPCheckoutSession> {
-    const response = await fetch(
-      `${merchantBase}/checkout_sessions/${sessionId}`,
-      {
-        method: 'POST',
-        headers: this.buildHeaders(data),
-        body: JSON.stringify(data),
-      },
+    return this.sellerRequest<ACPCheckoutSession>(
+      'PUT',
+      `${sellerBase}/checkouts/${sessionId}`,
+      data,
+      'update',
     );
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`ACP UpdateCheckout failed (${response.status}): ${error}`);
-    }
-
-    return response.json() as Promise<ACPCheckoutSession>;
   }
 
   /**
-   * Step 3: Create a SharedPaymentToken (SPT) scoped to this transaction.
-   * POST /v1/test_helpers/shared_payment/granted_tokens (test mode)
-   * or POST /v1/shared_payment/granted_tokens (live mode)
+   * POST /checkouts/:id/complete — Complete checkout with payment data.
+   */
+  async completeCheckout(
+    sellerBase: string,
+    sessionId: string,
+    paymentData: ACPPaymentData,
+  ): Promise<ACPCheckoutSession> {
+    return this.sellerRequest<ACPCheckoutSession>(
+      'POST',
+      `${sellerBase}/checkouts/${sessionId}/complete`,
+      { payment_data: paymentData },
+      'complete',
+    );
+  }
+
+  /**
+   * GET /checkouts/:id — Retrieve a checkout session.
+   */
+  async getCheckout(
+    sellerBase: string,
+    sessionId: string,
+  ): Promise<ACPCheckoutSession> {
+    return this.sellerRequest<ACPCheckoutSession>(
+      'GET',
+      `${sellerBase}/checkouts/${sessionId}`,
+      undefined,
+      'retrieve',
+    );
+  }
+
+  /**
+   * POST /checkouts/:id/cancel — Cancel a checkout session.
+   */
+  async cancelCheckout(
+    sellerBase: string,
+    sessionId: string,
+    reason?: string,
+  ): Promise<ACPCheckoutSession> {
+    return this.sellerRequest<ACPCheckoutSession>(
+      'POST',
+      `${sellerBase}/checkouts/${sessionId}/cancel`,
+      reason ? { reason } : {},
+      'cancel',
+    );
+  }
+
+  // ── SharedPaymentToken (via Stripe API) ───────────────────
+
+  /**
+   * Provision a SharedPaymentToken scoped to this transaction.
+   * Uses test_helpers endpoint in test mode, production endpoint in live mode.
    */
   private async createSharedPaymentToken(params: {
     amount: number;
     currency: string;
     merchantUrl: string;
-  }): Promise<SharedPaymentToken> {
-    const isTestMode = this.config.stripeSecretKey.startsWith('sk_test_');
+  }): Promise<{ id: string; created: number; usage_limits: { currency: string; max_amount: number; expires_at: number } }> {
+    const isTestMode = this.stripeSecretKey.startsWith('sk_test_');
     const endpoint = isTestMode
       ? '/v1/test_helpers/shared_payment/granted_tokens'
       : '/v1/shared_payment/granted_tokens';
 
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+
     const body = new URLSearchParams({
       'usage_limits[currency]': params.currency,
       'usage_limits[max_amount]': String(params.amount),
-      'usage_limits[expires_at]': String(Math.floor(Date.now() / 1000) + 3600), // 1 hour
+      'usage_limits[expires_at]': String(expiresAt),
       'seller_details[external_id]': params.merchantUrl,
     });
 
-    const response = await fetch(`${this.config.stripeBaseUrl}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.config.stripeSecretKey}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: body.toString(),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Stripe SPT creation failed (${response.status}): ${error}`);
-    }
-
-    return response.json() as Promise<SharedPaymentToken>;
-  }
-
-  /**
-   * Step 4: Complete the checkout session with the payment token.
-   * POST /checkout_sessions/{id}/complete
-   */
-  private async completeCheckout(
-    merchantBase: string,
-    sessionId: string,
-    paymentData: { token: string; provider: string },
-  ): Promise<ACPCheckoutSession> {
-    const body = { payment_data: paymentData };
-
-    const response = await fetch(
-      `${merchantBase}/checkout_sessions/${sessionId}/complete`,
-      {
+    try {
+      const res = await fetch(`${this.stripeBaseUrl}${endpoint}`, {
         method: 'POST',
-        headers: this.buildHeaders(body),
-        body: JSON.stringify(body),
-      },
-    );
+        headers: {
+          Authorization: `Bearer ${this.stripeSecretKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: body.toString(),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`ACP CompleteCheckout failed (${response.status}): ${error}`);
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new StripeACPError(
+          `SPT creation failed (${res.status}): ${errBody}`,
+          'spt',
+          res.status,
+        );
+      }
+
+      return res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // ── Webhook Verification ──────────────────────────────────
+
+  /**
+   * Verify an HMAC signature on an incoming webhook event from a seller.
+   * Returns the parsed event body if valid, throws if invalid.
+   */
+  verifyWebhookSignature(
+    payload: string | Buffer,
+    signature: string,
+    secret?: string,
+  ): Record<string, unknown> {
+    const signingSecret = secret || this.webhookSecret;
+    if (!signingSecret) {
+      throw new StripeACPError('No webhook secret configured', 'webhook');
     }
 
-    return response.json() as Promise<ACPCheckoutSession>;
+    const payloadStr = typeof payload === 'string' ? payload : payload.toString('utf8');
+
+    // Signature format: t=<timestamp>,v1=<hmac>
+    const parts = signature.split(',').reduce<Record<string, string>>((acc, part) => {
+      const [key, val] = part.split('=', 2);
+      acc[key] = val;
+      return acc;
+    }, {});
+
+    const timestamp = parts['t'];
+    const v1 = parts['v1'];
+    if (!timestamp || !v1) {
+      throw new StripeACPError('Invalid signature format', 'webhook');
+    }
+
+    // Reject events older than 5 minutes
+    const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+    if (age > 300) {
+      throw new StripeACPError('Webhook timestamp too old', 'webhook');
+    }
+
+    const signedPayload = `${timestamp}.${payloadStr}`;
+    const expected = createHmac('sha256', signingSecret)
+      .update(signedPayload)
+      .digest('hex');
+
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    const actualBuf = Buffer.from(v1, 'utf8');
+
+    if (expectedBuf.length !== actualBuf.length || !timingSafeEqual(expectedBuf, actualBuf)) {
+      throw new StripeACPError('Invalid webhook signature', 'webhook');
+    }
+
+    return JSON.parse(payloadStr);
+  }
+
+  // ── Internal Helpers ──────────────────────────────────────
+
+  private buildHeaders(method: string, body?: unknown): Record<string, string> {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const idempotencyKey = randomUUID();
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.stripeSecretKey}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+      'User-Agent': 'AgentGate/0.1.0 (agentic-commerce-protocol)',
+    };
+
+    // Only add idempotency for non-GET requests
+    if (method === 'GET') {
+      delete headers['Idempotency-Key'];
+    }
+
+    return headers;
+  }
+
+  private async sellerRequest<T>(
+    method: string,
+    url: string,
+    body: unknown | undefined,
+    step: StripeACPError['step'],
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: this.buildHeaders(method, body),
+        ...(body && method !== 'GET' ? { body: JSON.stringify(body) } : {}),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        let sellerMessage: string | undefined;
+        try {
+          const errJson = JSON.parse(errText);
+          sellerMessage = errJson.error || errJson.message;
+        } catch { /* not json */ }
+
+        throw new StripeACPError(
+          `ACP ${step} failed (${res.status}): ${errText}`,
+          step,
+          res.status,
+          sellerMessage,
+        );
+      }
+
+      return res.json() as Promise<T>;
+    } catch (error) {
+      if (error instanceof StripeACPError) throw error;
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new StripeACPError(`Request timed out after ${this.timeout}ms`, step);
+      }
+      throw new StripeACPError(
+        `Network error: ${error instanceof Error ? error.message : String(error)}`,
+        step,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
-   * Retrieve a checkout session (for verification).
-   * GET /checkout_sessions/{id}
+   * Extract the total amount in cents from a checkout session's totals array.
    */
-  private async retrieveCheckoutSession(
-    merchantBase: string,
-    sessionId: string,
-  ): Promise<ACPCheckoutSession> {
-    const response = await fetch(
-      `${merchantBase}/checkout_sessions/${sessionId}`,
-      {
-        method: 'GET',
-        headers: this.buildHeaders(),
-      },
-    );
-
-    if (!response.ok) {
-      throw new Error(`ACP RetrieveCheckout failed (${response.status})`);
-    }
-
-    return response.json() as Promise<ACPCheckoutSession>;
+  private extractTotal(session: ACPCheckoutSession): number {
+    const total = session.totals.find(t => t.type === 'total');
+    return total?.amount ?? 0;
   }
 
   /**
-   * Extract a base merchant API URL from a product URL.
-   * In production, this would resolve via a merchant registry or the URL itself.
+   * Resolve a merchant/seller URL to their ACP API base.
+   * Convention: {protocol}://{host}/acp
    */
-  private resolveMerchantUrl(merchantUrl: string): string {
+  private resolveSellerUrl(merchantUrl: string): string {
     try {
       const url = new URL(merchantUrl);
       return `${url.protocol}//${url.host}/acp`;

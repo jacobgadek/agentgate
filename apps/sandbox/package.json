@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "node --import tsx src/mock-agent.ts",
+    "demo:acp": "node --import tsx src/scenarios/stripe-acp-demo.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
